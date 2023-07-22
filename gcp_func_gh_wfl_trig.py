@@ -20,7 +20,7 @@ def trigger_github_workflow():
 
     owner = os.environ['OWNER'] 
     repo = os.environ['REPO'] 
-    github_webhook_token = os.environ['GitHub_PAT'] 
+    github_webhook_token = os.environ['GH_PAT'] 
 
     # Headers for a POST request to GitHub (token authentication)
     headers = {

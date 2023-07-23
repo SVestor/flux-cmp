@@ -88,6 +88,8 @@ module "kms" {
 - a ***'key ring'*** organizes keys in a specific Google Cloud location and allows you to manage access control on groups of keys. Must be unique within a given location. After creation, a key ring cannot be deleted. 
 > In the current context, WI, in its turn, through annotations in the manifest of the already existing flux service account named kustomization controller, will set up access to KMS, this will allow the controller to decrypt the secrets that we will encrypt using the KMS key.
 
+![wi-kms](/images/wi-kms.png)
+
 #### Let's check the annotation, keyring, and KMS key:
 ```bash
 alias k=kubectl
@@ -159,6 +161,7 @@ patches:
 ```.bash
 k get sa -n flux-system kustomize-controller -o yaml | grep -A5 anno
 ```
+![anno](/images/anno.png)
 ---
 **2.** Creating the GitHub Actions workflow for the 'secret-manifest.yaml' to be generated and encrypted using the GitHub Actions pipeline
 We will use Mozilla **SOPS** to generate a 'secret-manifest.yaml' for the 'TELE_TOKEN' key

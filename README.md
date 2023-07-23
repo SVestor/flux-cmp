@@ -7,7 +7,7 @@
 - secret-manifest is generated and encrypted using the GitHub Actions pipeline, and the token is stored in the GCP Secret Manager.
 - for implementation of the secret's update or rotation, the following scheme has been developed: <br>
 
-   ***GCP Secret-Manager*** --> ***GCP Pub/Sub*** --> ***Cloud Function with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
+   ***GCP Secret-Manager*** --> ***GCP Pub/Sub*** --> ***CloudFunction with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
 ---
 ## Stages:
 
@@ -308,3 +308,149 @@ jobs:
           git commit -am "update secret"
           git push origin main
 ```
+---
+**3.** The final one. Implementation of the secret's update or rotation
+#### Set of principles:
+- The function subscribes to a 'Cloud Pub/Sub' topic that is published when a secret changes in 'GCP Secret Manager'.
+- The function makes a POST request to the GitHub API, which activates the 'repository_dispatch' 'gcp-secret-changed' event in our repository and thereby triggers our GitHub Actions Workflow.
+- This function provides monitoring of secret value changes in 'GCP Secret Manager', as it receives a secret change notification whenever the secret changes.
+- The function is written in Python and deployed on the Google Cloud Platform with 'Cloud Run' service.
+
+> Now we need to create a ***service agent*** identity for each project that requires secrets with event notifications.
+To create a service identity with Google Cloud CLI, run the following command:
+```.bash
+gcloud beta services identity create \ 
+--service "secretmanager.googleapis.com" \ 
+--project $PROJECT_ID
+
+# The previous command returns a service account name, using the following format:
+Service identity created: service-740260502653@gcp-sa-secretmanager.iam.gserviceaccount.com
+
+# You will grant this service account permission to publish on the Pub/Sub topics which will be configured on your secrets.
+# Save the service account name as an environment variable:
+
+export SM_SERVICE_ACCOUNT=service-740260502653@gcp-sa-secretmanager.iam.gserviceaccount.com
+```
+> Create Pub/Sub topic:
+```.bash
+# Follow the Pub/Sub quickstart to create topics in your Pub/Sub project in the Google Cloud console.
+# Alternatively, you can create topics with Google Cloud CLI as in this example:
+
+gcloud pubsub topics create "projects/$PROJECT_ID/topics/gcp_secrets_TEST_SECRET"
+
+# Grant the service account for Secret Manager permission to publish on the topics just created. This can be done through the Google Cloud console or with Google Cloud CLI. # The following command grants the Pub/Sub Publisher role (roles/pubsub.publisher) on the 'my-topic' Pub/Sub topic to the service account.
+
+gcloud pubsub topics add-iam-policy-binding gcp_secrets_TEST_SECRET \ 
+--member "serviceAccount:${SM_SERVICE_ACCOUNT}" \ 
+--role "roles/pubsub.publisher"
+
+# Note: To grant the service account permission to publish on a topic, you must have resourcemanager.projects.setIamPolicy permission. This permission is included in the Project Owner, Project IAM Admin, and Organization Administrator roles.
+```
+> Create Pub/Sub subscriptions
+```.bash
+# In order to view the messages published to a topic, you must also create a subscription to the topic.
+# Follow the Pub/Sub quickstart to create subscriptions in your Pub/Sub project in the Google Cloud console.
+# Alternatively, you can create subscriptions with Google Cloud CLI as in this example
+
+gcloud pubsub subscriptions create "projects/$PROJECT_ID/subscriptions/gcp_secrets_TEST_SECRET" \
+    --topic "projects/$PROJECT_ID/topics/gcp_secrets_TEST_SECRET"
+```
+> Update secret topic
+```.bash
+# Modify the Pub/Sub topics configured on a secret by updating the secret with the new Pub/Sub topic resource names.
+# With Google Cloud CLI you can add or remove one or more topics from a secret, as well as clear all topics from the secret.
+# Add topics
+# Adds one or more topics to a secret. Adding a topic which is already present will have no effect.
+
+gcloud secrets update "SECRET_ID" \
+    --project "PROJECT_ID" \
+    --add-topics "projects/PUBSUB_PROJECT_ID/topics/gcp_secrets_TEST_SECRET"
+```
+> Consume event notifications with Cloud Functions
+> - Event notifications can be used to trigger arbitrary workflows by creating cloud functions to consume the Pub/Sub messages. 
+> - See the [Cloud Functions documentation](https://cloud.google.com/functions/docs/tutorials/pubsub)  for a full guide
+```.bash
+# Create and Deploy CloudFunction
+gcloud functions deploy python-test-secret-function \
+--gen2 \
+--runtime=python311 \
+--region=us-central1 \
+--source=. \
+--entry-point=subscribe \
+--trigger-topic=gcp_secrets_TEST_SECRET
+```
+> The function_code looks as follows:
+```.py
+import base64
+from cloudevents.http import CloudEvent
+import functions_framework
+import requests
+import os
+
+# Triggered from a message on a Cloud Pub/Sub topic.
+@functions_framework.cloud_event
+def subscribe(cloud_event: CloudEvent) -> None:
+    # Print out the data from Pub/Sub, to prove that it worked
+    print(
+        "secret update, " + base64.b64decode(cloud_event.data["message"]["data"]).decode() + "!"
+    )
+# Calling the github 'trigger_github_workflow' func after receiving a message in the topic
+    trigger_github_workflow()
+	
+def trigger_github_workflow():
+    github_api_url = 'https://api.github.com/repos/{owner}/{repo}/dispatches'
+
+    owner = os.environ['OWNER'] 
+    repo = os.environ['REPO'] 
+    github_webhook_token = os.environ['GH_PAT'] 
+
+    # Headers for a POST request to GitHub (token authentication)
+    headers = {
+        'Authorization': f'Bearer {github_webhook_token}',
+        'Accept': 'application/vnd.github.everest-preview+json'
+    }
+
+    # The body of the POST request to generate the "repository_dispatch" event
+    data = {
+        'event_type': 'gcp_secret_changed',  # Event type
+        'client_payload': {}  # You can pass additional data in the payload if needed
+    }
+
+    response = requests.post(github_api_url.format(owner=owner, repo=repo), json=data, headers=headers)
+
+    if response.status_code == 204:
+        print('GitHub Workflow triggered successfully')
+    else:
+        print('Error triggering GitHub Workflow')
+``` 
+> Granting access to secrets inside the function such as 'GH_PAT'
+- Our function can access secrets that reside in the same project as the function as well as secrets that reside in another project. To access a secret, the function's runtime service account must be granted access to the secret.
+- By default, Cloud Functions uses the [App Engine default service account](https://cloud.google.com/functions/docs/securing/function-identity) to authenticate with Secret Manager. For production use, Google recommends that you configure your function to authenticate using a [user-managed service account](https://cloud.google.com/iam/docs/service-account-types) that is assigned the least-permissive set of roles required to accomplish that function's tasks.
+- To use Secret Manager with Cloud Functions, assign the 'roles/secretmanager.secretAccessor' role to the service account associated with your function:
+  ![sm-function.png](/images/sm-function.png)
+
+> Preparing your function to access secrets
+> There are two ways of making a secret available to your function:
+> - passing the secret as an environment variable.
+> - mounting the secret as a volume.
+  ![prep-sec.png](/images/prep-sec.png)
+  ![prep-sec1.png](/images/prep-sec1.png)
+  ![prep-sec2.png](/images/prep-sec2.png)
+
+> - ***! Now we need to redeploy our function for the changes to take effect !*** <br>
+
+---
+
+**Once all of the above is done, we can manually update the version and secret value to test all the processes of automating the launch of our workflow. Once it updated:** <br>
+> - The 'Cloud Pub/Sub' topic through the received notification from Cloud Secret Manager triggers the CloudFunction <br>
+> - The function makes a POST request to the GitHub API, which activates the 'repository_dispatch' 'gcp-secret-changed' event in our repository and thereby triggers our GitHub Actions Workflow <br>
+> - GitHub Actions pushes the updated 'secret-manifest.yaml' file into the Flux infrastructure repository 'flux-gitops' <br>
+> - The Flux controller must decrypt the secret using the KMS key, access to which is provided by the annotated service account and Workload Identity (WI), and then a native Kubernetes secret will be created, which we will use to access the Telegram API.
+
+```.bash
+
+echo -n "<paste the token value here>" > secret_update.txt
+gcloud secrets versions add TELE_TOKEN --data-file="./secret_update.txt"
+```
+
+***GCP Secret-Manager*** --> ***GCP Pub/Sub*** --> ***CloudFunction with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***

@@ -7,7 +7,7 @@
 - secret-manifest is generated and encrypted using the GitHub Actions pipeline, and the token is stored in the GCP Secret Manager.
 - for implementation of the secret's update or rotation, the following scheme has been developed: <br>
 
-   ***GCP Secret-Manager*** --> ***GCP Pub/Sub*** --> ***CloudFunction with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
+   ***GCP Secret-Manager secret update*** --> ***GCP Pub/Sub*** --> ***CloudFunction with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
 ---
 ## Stages:
 
@@ -453,4 +453,19 @@ echo -n "<paste the token value here>" > secret_update.txt
 gcloud secrets versions add TELE_TOKEN --data-file="./secret_update.txt"
 ```
 
-***GCP Secret-Manager*** --> ***GCP Pub/Sub*** --> ***CloudFunction with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
+***GCP Secret-Manager secret update*** --> ***GCP Pub/Sub*** --> ***CloudFunction with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
+
+```.bash
+➜  ~ exit
+```
+
+> For a more detailed understanding, you can familiarize yourself with the following resources:<br>
+> - [Configure workload identity federation with other identity providers](https://cloud.google.com/iam/docs/workload-identity-federation-with-other-providers) <br>
+> - [Set up notifications on a secret](https://cloud.google.com/secret-manager/docs/event-notifications) <br>
+> - [Add a secret version](https://cloud.google.com/secret-manager/docs/add-secret-version#secretmanager-add-secret-version-gcloud)<br>
+> - [gcloud secret update](https://cloud.google.com/sdk/gcloud/reference/secrets/update)<br>
+> - [Making secret accessible to a function](https://cloud.google.com/functions/docs/configuring/secrets#console)
+> - [What is Pub/Sub](https://cloud.google.com/pubsub/docs/overview) <br>
+> - [Cloud Pub/Sub Tutorial (2nd gen)](https://cloud.google.com/functions/docs/tutorials/pubsub#functions-change-directory-python) <br>
+> - [Service agents](https://cloud.google.com/iam/docs/service-agents) <br>
+> - [What is Cloud Run](https://cloud.google.com/run/docs/overview/what-is-cloud-run)

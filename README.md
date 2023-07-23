@@ -460,6 +460,7 @@ gcloud secrets versions add TELE_TOKEN --data-file="./secret_update.txt"
 ```
 
 > For a more detailed understanding, you can familiarize yourself with the following resources:<br>
+> - [Manage Kubernetes secrets with Mozilla SOPS](https://fluxcd.io/flux/guides/mozilla-sops/)
 > - [Configure workload identity federation with other identity providers](https://cloud.google.com/iam/docs/workload-identity-federation-with-other-providers) <br>
 > - [Set up notifications on a secret](https://cloud.google.com/secret-manager/docs/event-notifications) <br>
 > - [Add a secret version](https://cloud.google.com/secret-manager/docs/add-secret-version#secretmanager-add-secret-version-gcloud)<br>

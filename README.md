@@ -202,3 +202,109 @@ You can use an attribute condition to restrict which identities can authenticate
 > For a more detailed understanding of how to configure WIF, you can familiarize yourself with the following resources:<br>
 > - [Workload identity federation](https://cloud.google.com/iam/docs/workload-identity-federation) <br>
 > - [Configure workload identity federation](https://cloud.google.com/iam/docs/workload-identity-federation-with-other-providers)
+
+> ![wif-provider](/images/wif-provider.png)
+> ![attr-map](/images/attr-map.png)
+
+- Now we need to grant 'iam.workloadIdentityUser' and 'secretmanager.secretAccessor' roles to our GCP service account to bind it with our WIF and Secret Manager, and associate it with a specific workload identified by the member value.
+- This allows our 'gh user' to authenticate using the credentials of the service account within the specified GCP project. We will use it next in our github workflow: 
+```.bash
+gcloud iam service-accounts add-iam-policy-binding "gh-actions@k8s-k3s-8.iam.gserviceaccount.com" \
+  --project=${PROJECT_ID} \
+  --role="roles/iam.workloadIdentityUser" \
+  --role="roles/secretmanager.secretAccessor" \
+  --member="principalSet://iam.googleapis.com/projects/740260502653/locations/global/workloadIdentityPools/gh-actions/attribute.repository/SVestor/flux-cmp"
+```
+> So, after the configuration of WIF is done we should add the necessary environment variables to our 'github actions', such as:
+> - FLUX_PRIVATE --> what defines our infrastructure repo
+> - WIF_PROVIDER --> what defines our WIF provider
+> - SA_EMAIL --> what defines our GCP gh service account
+> - GH_PAT --> what defines our GH PAT to access the infra repo    
+> - then we can start implementing a code into our workflow
+
+- The code is looking as follows:
+```.yaml
+name: kbot update-secret
+
+on:
+  repository_dispatch:
+    types:
+      - gcp_secret_changed
+  
+  # workflow_dispatch
+
+env:
+  SOPS_REPO: "mozilla/sops"
+  OS: "linux"
+  ARCH: "amd64"
+  
+jobs:
+  get-secret:
+    name: get-secret
+    runs-on: ubuntu-20.04
+    
+   # Add "id-token" with the intended permissions.
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps: 
+   # Clonning repos
+      - name: Checkout source repo
+        uses: 'actions/checkout@v3'
+        
+      - name: Checkout dest repo
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ secrets.FLUX_PRIVATE }}
+          token: ${{ secrets.GH_PAT }}
+          path: destination_repo  
+
+    # Configure Workload Identity Federation via a credentials file
+      - id: 'auth'
+        name: 'Authenticate to GCP'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          token_format: 'access_token'
+          workload_identity_provider: '${{ secrets.WIF_PROVIDER }}'
+          service_account: '${{ secrets.SA_EMAIL }}'
+        
+    # Install gcloud 'setup-gcloud' automatically picks up authentication from 'auth'
+      - name: 'Setting up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v1'
+      
+    # 'Setting up' kubectl
+      - name: 'Setting up kubectl'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+        id: install  
+      
+    # 'Setting up' sops
+      - name: 'Setting up sops'
+        run: |-
+          export BIN_URL="https://api.github.com/repos/${SOPS_REPO}/releases/latest"
+          curl -Lo sops "$(curl -Ls ${BIN_URL} | grep 'browser_download_url' | cut -d '"' -f 4 | grep "${OS}.${ARCH}$")"
+          chmod +x sops
+
+    # Now you can run gcloud commands authenticated as the impersonated service account
+    # 'Getting & encrypting' a secret
+      - id: 'secret'
+        name: 'Getting & encrypting'
+        env: 
+          SOPS_KEY: '${{ secrets.SOPS_KEY }}'
+        run: |-
+          export SECRET_VALUE="$(gcloud secrets versions access latest --secret=TELE_TOKEN)" 
+          kubectl -n kbot-demo create secret generic kbot-secret --from-literal=token=${SECRET_VALUE} --dry-run=client -o yaml > secret.yaml
+          ./sops -e -gcp-kms ${SOPS_KEY} --encrypted-regex '^(token)$' secret.yaml > secret-enc.yaml
+          mv secret-enc.yaml destination_repo/clusters/kbot-demo
+   
+   # 'Pushing a secret' to the REPO-flux-cluster
+      - name: 'Pushing a secret'
+        run: |-
+          cd destination_repo
+          git config user.name flux-cmp
+          git config user.email flux-cmp@github.com
+          git commit -am "update secret"
+          git push origin main
+```

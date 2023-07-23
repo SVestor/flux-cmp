@@ -6,7 +6,8 @@
 - the GKE cluster, Flux, KMS, and the infrastructure 'flux-gitops' repo is deployed via Terraform
 - secret-manifest is generated and encrypted using the GitHub Actions pipeline, and the token is stored in the GCP Secret Manager.
 - for implementation of the secret's update or rotation, the following scheme has been developed: <br>
-   GCP Secret-Manager --> GCP Pub/Sub --> Cloud Function with POST request --> GitHub Actions --> Updated secret manifest in the infrastructure 'flux-gitops' repo
+
+   ***GCP Secret-Manager*** --> ***GCP Pub/Sub*** --> ***Cloud Function with POST request*** --> ***GitHub Actions*** --> ***Updated secret manifest in the infrastructure 'flux-gitops' repo***
 ---
 ## Stages:
 
@@ -143,6 +144,7 @@ spec:
 **Kustomize** is the **Kubernetes Native Configuration Management** enabled by default with kubectl and Flux is used for resource patching.
 
 ```.yaml
+---
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -162,8 +164,41 @@ patches:
 k get sa -n flux-system kustomize-controller -o yaml | grep -A5 anno
 ```
 ![anno](/images/anno.png)
+
+> The annotation is in place again - it means that Flux uses the kustomization controller service account for authorization into KMS
 ---
 **2.** Creating the GitHub Actions workflow for the 'secret-manifest.yaml' to be generated and encrypted using the GitHub Actions pipeline
-We will use Mozilla **SOPS** to generate a 'secret-manifest.yaml' for the 'TELE_TOKEN' key
+#### So, what іs our expectations here:
+- Our token is added and stored to the GCP Secret Manager 
+- Our GitHub Action workflow must connect to the GCP Secret Manager, fetch our token from, create the 'secret-manifest.yaml' via SOPS which encrypt it with the KMS key  
+- Then GitHub Action must push the 'secret-manifest.yaml' file into the Flux infrastructure repository 'flux-gitops'. 
+The Flux controller must decrypt the secret using the KMS key, access to which is provided by the annotated service account and Workload Identity (WI), and then a native Kubernetes secret will be created, which we will use to access the Telegram API.
 
+#### We will use Mozilla **SOPS** to generate a 'secret-manifest.yaml' for the 'TELE_TOKEN' key
+> In order to store secrets safely in a public or private Git repository, you can use Mozilla’s SOPS CLI to encrypt Kubernetes secrets with OpenPGP, AWS KMS, GCP KMS and Azure Key Vault
 
+#### For setting up the connection between our GCP with GitHub we will use the workload identity federation
+> With identity federation, you can use Identity and Access Management (IAM) to grant external identities IAM roles, including the ability to impersonate service accounts. This approach eliminates the maintenance and security burden associated with service account keys.<br> You can use identity federation with any identity provider (IdP) that supports 'OpenID Connect (OIDC)'
+
+#### Workload identity pools
+> A workload identity pool is an entity that lets you manage external identities.
+
+- In general, we must create a new pool and provider on the GCP side for our non-Google Cloud environment that needs to access Google Cloud resources, such as development, staging, or production environments.
+
+#### Workload identity pool providers
+> A workload identity pool provider is an entity that describes a relationship between Google Cloud and your identity provider IdP <br>
+> Workload identity federation follows the 'OAuth 2.0' token exchange specification. <br>
+> You provide a credential from your IdP to the Security Token Service, which verifies the identity on the credential, and then returns a federated token in exchange.
+
+#### Attribute mappings
+> The tokens issued by your external identity provider contain one or more attributes. Some identity providers refer to these attributes as claims. <br>
+Google STS tokens also contain one or more attributes, as listed in the following table:
+![wi-attr](/images/wi-attr.png)
+
+#### Attribute conditions
+> An attribute condition is a CEL expression that can check assertion attributes and target attributes. If the attribute condition evaluates to true for a given credential, the credential is accepted. Otherwise, the credential is rejected. <br>
+You can use an attribute condition to restrict which identities can authenticate using your workload identity pool.
+
+> For a more detailed understanding of how to configure WIF, you can familiarize yourself with the following resources:<br>
+> - [Workload identity federation](https://cloud.google.com/iam/docs/workload-identity-federation) <br>
+> - [Configure workload identity federation](https://cloud.google.com/iam/docs/workload-identity-federation-with-other-providers)
